@@ -10,6 +10,26 @@ Everything runs on your machine. Files are read in memory and nothing is sent an
 
 ## Quick start
 
+### Desktop shortcut (easiest)
+
+```bash
+python3 scripts/install_shortcut.py
+```
+
+Puts an **AR Collections** shortcut on your Desktop — a `.command` on macOS, a
+`.bat` on Windows, a `.desktop` entry on Linux. Double-click it and the app opens
+at `http://localhost:8501`.
+
+The first launch builds an isolated `.venv` inside the project and installs
+everything it needs (about a minute); after that it starts in seconds. Nothing
+else on the machine is changed. Remove it again with
+`python3 scripts/install_shortcut.py --remove`.
+
+On macOS the first double-click may warn about an unidentified developer —
+right-click the shortcut, choose **Open**, then confirm.
+
+### Or from a terminal
+
 ```bash
 make install     # pip install -r requirements.txt
 make sample      # generate a demo dataset (optional)

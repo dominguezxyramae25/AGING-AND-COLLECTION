@@ -149,6 +149,10 @@ def build_analysis(invoices: pd.DataFrame,
 
     risk = collections.risk_ranking(detail, behavior, customers,
                                     net_credits=net_credits, scheme=scheme)
+
+    # Several modules can reach the same conclusion (a missing sales file is
+    # noticed by both the trend and the per-customer view); say it once.
+    notes = list(dict.fromkeys(notes))
     issues = quality.run_checks(invoices, payments, sales, customers, as_of)
 
     # --- headline KPIs ---------------------------------------------------------

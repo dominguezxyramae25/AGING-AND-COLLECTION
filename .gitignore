@@ -3,6 +3,7 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
+.streamlit/credentials.toml
 
 # Generated sample data and any AR files you drop in for analysis.
 sample_data/out/

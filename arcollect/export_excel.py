@@ -13,9 +13,22 @@ HEADER_BG = "#1f3348"
 BAND = "#f4f6f9"
 
 
+def _quote_symbol(symbol: str) -> str:
+    """Make a currency symbol safe inside an Excel number-format code.
+
+    Unquoted letters are date/time tokens to Excel -- d, m, y, h, s -- so a
+    symbol like "PHP " turns the whole format into a time code and every amount
+    renders as a date error. Quoting the literal text prevents that.
+    """
+    if not symbol:
+        return ""
+    return '"' + symbol.replace('"', "") + '"'
+
+
 def _formats(book, symbol: str) -> dict:
-    money = f'{symbol}#,##0.00;[Red]({symbol}#,##0.00)'
-    money0 = f'{symbol}#,##0;[Red]({symbol}#,##0)'
+    sym = _quote_symbol(symbol)
+    money = f'{sym}#,##0.00;[Red]({sym}#,##0.00)'
+    money0 = f'{sym}#,##0;[Red]({sym}#,##0)'
     return {
         "title": book.add_format({"bold": True, "font_size": 16, "font_color": INK}),
         "subtitle": book.add_format({"font_size": 10, "font_color": INK_MUTED}),

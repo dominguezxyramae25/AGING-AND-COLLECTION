@@ -1,10 +1,12 @@
 """DSO, CEI and payment-behaviour math, asserted against hand-computed answers."""
 
+import io
+
 import numpy as np
 import pandas as pd
 import pytest
 
-from arcollect import aging, allocate, collections, dso, kpis
+from arcollect import aging, allocate, collections, dso, export_excel, kpis
 
 
 def _book():
@@ -226,3 +228,27 @@ def test_analysis_totals_reconcile():
     final_ar = analysis.dso_trend["total_ar"].iloc[-1]
     assert analysis.kpis["gross_ar"] == pytest.approx(final_ar, rel=1e-6)
     assert analysis.kpis["total_ar"] == pytest.approx(20_000.0)
+
+
+def test_excel_currency_symbol_is_quoted_in_number_format():
+    """Letters are date/time tokens in an Excel format code, so a symbol such as
+    "PHP " must be quoted or every amount renders as a date error."""
+    from arcollect.export_excel import _quote_symbol
+    assert _quote_symbol("PHP ") == '"PHP "'
+    assert _quote_symbol("$") == '"$"'
+    assert _quote_symbol("") == ""
+
+
+def test_excel_workbook_renders_amounts_as_numbers_not_dates():
+    """Regression: a multi-letter currency symbol used to corrupt every money cell."""
+    import warnings
+    import openpyxl
+    invoices, payments, sales = _book()
+    analysis = kpis.build_analysis(invoices, payments, sales,
+                                   as_of=pd.Timestamp("2026-02-28"))
+    data = export_excel.build_workbook(analysis, "PHP ")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        openpyxl.load_workbook(io.BytesIO(data))
+    date_errors = [w for w in caught if "marked as a date" in str(w.message)]
+    assert not date_errors, f"{len(date_errors)} money cells were parsed as dates"

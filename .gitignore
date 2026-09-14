@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Generated sample data and any AR files you drop in for analysis.
+sample_data/out/
+input/*
+!input/.gitkeep
+
+# Saved column-mapping profiles are local to your export format.
+profiles/*.json
+
+# Generated reports
+*.xlsx
+*.pdf
+!sample_data/**/*.xlsx

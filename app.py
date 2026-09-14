@@ -12,7 +12,8 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from arcollect import charts, export_excel, export_pdf, ingest, kpis, mapping
+from arcollect import (aging, charts, export_excel, export_pdf, ingest, kpis,
+                       mapping, quickbooks)
 from arcollect.schema import ROLE_LABELS, ROLES, fields_for, required_fields
 
 APP_DIR = Path(__file__).resolve().parent
@@ -146,20 +147,30 @@ if profiles:
     chosen = st.sidebar.selectbox("Load a saved profile", ["-- none --"] + profiles)
     if chosen != "-- none --" and st.sidebar.button("Apply profile", use_container_width=True):
         saved = mapping.load_profile(chosen)
-        for role, cols in saved.items():
+        for key, cols in saved.items():
             for field_name, source in cols.items():
-                st.session_state[f"map_{role}_{field_name}"] = source or "-- not mapped --"
+                for existing in list(st.session_state):
+                    if existing.endswith(f"_{key}_{field_name}"):
+                        st.session_state[existing] = source or "-- not mapped --"
         st.sidebar.success(f"Applied '{chosen}'.")
 
 dayfirst = st.sidebar.checkbox(
     "Dates are day-first (31/12/2025)", value=False,
     help="Tick this for DD/MM/YYYY files so dates are not misread as month-first.")
 
+collected: dict[str, list[pd.DataFrame]] = {}
 frames: dict[str, pd.DataFrame] = {}
 mappings: dict[str, dict[str, str | None]] = {}
 all_notes: list[str] = []
 blocking: list[str] = []
 assigned: set[str] = set()
+
+SKIP = "-- skip this file --"
+
+# Read every source first. A QuickBooks "Invoices and Received Payments" export
+# holds both kinds of row in one sheet, so it becomes two datasets.
+datasets: list[tuple[str, pd.DataFrame, str | None]] = []
+qb_notes: list[str] = []
 
 for index, (filename, data) in enumerate(sources):
     sheet_names = _sheets(data, filename)
@@ -177,20 +188,42 @@ for index, (filename, data) in enumerate(sources):
         st.sidebar.warning(f"{filename} has no readable rows.")
         continue
 
+    meta = raw.attrs.get("quickbooks") or {}
+    for note in meta.get("notes", []):
+        qb_notes.append(f"{filename}: {note}")
+
+    if quickbooks.is_mixed_ledger(raw):
+        inv_part, pay_part = quickbooks.split_transactions(raw)
+        pay_part = quickbooks.strip_payment_due_dates(pay_part)
+        qb_notes.append(
+            f"{filename}: one ledger holding both kinds of row; split into "
+            f"{len(inv_part):,} invoices and {len(pay_part):,} payments.")
+        if not inv_part.empty:
+            datasets.append((f"{filename} · invoices", inv_part, "invoices"))
+        if not pay_part.empty:
+            datasets.append((f"{filename} · payments", pay_part, "payments"))
+    else:
+        datasets.append((filename, raw, None))
+
+for index, (filename, raw, forced_role) in enumerate(datasets):
     headers = [str(c) for c in raw.columns]
-    guess = mapping.guess_role(headers, exclude=assigned)
+    guess = forced_role or mapping.guess_role(headers, exclude=assigned)
     role_key = f"role_{index}"
+    choices = [*ROLES, SKIP]
     role = st.sidebar.selectbox(
-        f"**{filename}** is…", ROLES, index=ROLES.index(guess),
-        format_func=lambda r: ROLE_LABELS[r], key=role_key)
-    assigned.add(role)
+        f"**{filename}** is…", choices, index=choices.index(guess),
+        format_func=lambda r: r if r == SKIP else ROLE_LABELS[r], key=role_key)
+    if role == SKIP:
+        continue
+    if role != "invoices":
+        assigned.add(role)
 
     auto = mapping.auto_map(headers, role)
     options = ["-- not mapped --"] + headers
     with st.sidebar.expander(f"Columns · {ROLE_LABELS[role]}", expanded=False):
         selected: dict[str, str | None] = {}
         for spec in fields_for(role):
-            state_key = f"map_{role}_{spec.name}"
+            state_key = f"map_{index}_{role}_{spec.name}"
             default = auto.get(spec.name) or "-- not mapped --"
             if state_key in st.session_state and st.session_state[state_key] in options:
                 default = st.session_state[state_key]
@@ -208,7 +241,12 @@ for index, (filename, data) in enumerate(sources):
         blocking.append(f"**{filename}** ({ROLE_LABELS[role]}) is missing required "
                         f"column(s): {missing}. Set them under *Columns* in the sidebar.")
     else:
-        frames[role] = result.frame
+        collected.setdefault(role, []).append(result.frame)
+
+for role, parts in collected.items():
+    merged, merge_notes = mapping.combine(parts, role)
+    frames[role] = merged
+    all_notes += merge_notes
 
 if profiles is not None:
     with st.sidebar.expander("Save this mapping"):
@@ -225,6 +263,16 @@ entity = st.sidebar.text_input("Entity name (for the report header)", value="")
 default_terms = st.sidebar.number_input(
     "Default terms when none supplied (days)", 0, 365, 30,
     help="Used only where an invoice has neither a due date nor payment terms.")
+scheme = st.sidebar.selectbox(
+    "Aging buckets", list(aging.SCHEMES),
+    format_func=lambda s: {"standard": "Current / 1-30 / 31-60 / 61-90 / 91-120 / 120+",
+                           "quickbooks": "QuickBooks (adds 121-150 and 151+)"}[s],
+    help="Pick the scheme your accounting system prints so the two reports tie.")
+net_credits = st.sidebar.checkbox(
+    "Age credit balances into their bucket", value=True,
+    help="On (default) matches what an ERP aging report prints. Off holds credit "
+         "memos and negative adjustments outside the buckets. Either way the credit "
+         "total is shown separately.")
 days_basis = st.sidebar.radio("Days in period for DSO", ["calendar", "30"],
                               horizontal=True,
                               help="'calendar' uses actual days in each month.")
@@ -252,8 +300,9 @@ with st.spinner("Analysing…"):
     analysis = kpis.build_analysis(
         invoices, frames.get("payments"), frames.get("sales"), frames.get("customers"),
         as_of=pd.Timestamp(as_of), default_terms=int(default_terms),
-        days_basis=days_basis, lookback_months=int(lookback))
-analysis.notes = all_notes + analysis.notes
+        days_basis=days_basis, lookback_months=int(lookback),
+        scheme=scheme, net_credits=net_credits)
+analysis.notes = qb_notes + all_notes + analysis.notes
 
 k = analysis.kpis
 
@@ -281,6 +330,14 @@ with head_r:
         file_name=f"AR_Collections_Report_{stamp}.pdf",
         mime="application/pdf", use_container_width=True)
 
+if qb_notes:
+    with st.expander(f"📄  {len(qb_notes)} layout adjustment(s) applied to your files",
+                     expanded=False):
+        st.caption("These reports are laid out for printing rather than as data tables. "
+                   "Here is exactly what was restructured before any number was computed.")
+        for note in qb_notes:
+            st.markdown(f"- {note}")
+
 errors = int((analysis.issues["severity"] == "Error").sum()) if not analysis.issues.empty else 0
 if errors:
     st.warning(f"{errors} data-quality **error(s)** found. Totals may be wrong until they "
@@ -300,25 +357,37 @@ def _metric(column, label: str, value: str, note: str | None = None) -> None:
             st.caption(note)
 
 
+stale_cash = (not analysis.issues.empty and analysis.issues["check"].str.contains(
+    "Payment history stops", case=False, na=False).any())
+CASH_WARNING = "⚠ unreliable — see Data Quality"
+
+if stale_cash:
+    st.warning(
+        "**Aging is sound; the cash-based metrics are not.** Your payment export ends "
+        "before the as-of date, so DSO, CEI, days-to-pay and on-time rate are computed "
+        "on incomplete collections and are marked below. Export payments covering the "
+        "full period to make them meaningful.", icon="💵")
+
 row1 = st.columns(5)
-_metric(row1[0], "Total AR", _fmt_money(k["total_ar"], symbol),
-        f"{_fmt_money(k['gross_ar'], symbol)} gross of credits"
+_metric(row1[0], "Total AR", _fmt_money(k["reported_ar"], symbol),
+        f"incl. {_fmt_money(k['credit_balances'], symbol)} credits"
         if k["credit_balances"] else None)
 _metric(row1[1], "Past due", _fmt_money(k["past_due_ar"], symbol),
         f"{k['pct_past_due']:.1f}% of AR")
 _metric(row1[2], "Over 90 days", _fmt_money(k["over_90_ar"], symbol),
         f"{k['pct_over_90']:.1f}% of AR")
 _metric(row1[3], "DSO", _fmt(k["dso"], " d"),
-        f"{_fmt(k['delinquent_dso'], ' d')} delinquent")
-_metric(row1[4], "CEI", _fmt(k["cei"], "%"), "80% is the usual benchmark")
+        CASH_WARNING if stale_cash else f"{_fmt(k['delinquent_dso'], ' d')} delinquent")
+_metric(row1[4], "CEI", _fmt(k["cei"], "%"),
+        CASH_WARNING if stale_cash else "80% is the usual benchmark")
 
 row2 = st.columns(5)
 _metric(row2[0], "Best possible DSO", _fmt(k["best_possible_dso"], " d"),
         "floor if nothing went late")
 _metric(row2[1], "Avg days to pay", _fmt(k["avg_days_to_pay"], " d"),
-        "weighted by amount")
+        CASH_WARNING if stale_cash else "weighted by amount")
 _metric(row2[2], "On-time payment rate", _fmt(k["on_time_rate"], "%"),
-        "paid by due date")
+        CASH_WARNING if stale_cash else "paid by due date")
 _metric(row2[3], "Avg days delinquent", _fmt(k["add_days"], " d"), "balance-weighted")
 _metric(row2[4], "Over credit limit", f"{k['over_limit_customers']:,}",
         f"{_fmt_money(k['over_limit_exposure'], symbol)} exposed")
@@ -345,8 +414,12 @@ with tabs[0]:
                 "Amount": st.column_config.NumberColumn(format=_money_format(symbol)),
                 "% of AR": st.column_config.NumberColumn(format="%.1f%%"),
                 "Invoices": st.column_config.NumberColumn(format="%d")})
-        st.caption("Aged on days past **due date**. Credit balances are listed "
-                   "separately and are not netted into buckets.")
+        st.caption("Aged on days past **due date**. "
+                   + ("Credit balances are aged into their bucket, as an ERP aging "
+                      "report does; the credit total is shown on the Total AR tile."
+                      if net_credits else
+                      "Credit balances are held outside the buckets and shown "
+                      "separately."))
 
     st.subheader("Largest balances: current vs past due")
     label_col = ("customer_name" if "customer_name" in analysis.customer_aging.columns

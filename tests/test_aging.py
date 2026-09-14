@@ -106,14 +106,41 @@ def test_add_ignores_current_invoices():
     assert aging.weighted_average_days_delinquent(detail) == pytest.approx(50.0)
 
 
-def test_credits_are_not_netted_into_buckets():
+def test_credits_netted_into_buckets_by_default():
+    """Netting matches what an ERP aging report prints: the credit ages alongside
+    the invoice, so the bucket carries 500 - 200 = 300."""
     df = pd.DataFrame([_invoice(45, 500.0, "A"), _invoice(45, -200.0, "CM")])
     detail, _ = aging.build_aging(df, AS_OF)
     totals = aging.bucket_totals(detail)
-    assert totals.loc[totals["Bucket"] == "31-60", "Amount"].iloc[0] == pytest.approx(500.0)
+    assert totals.loc[totals["Bucket"] == "31-60", "Amount"].iloc[0] == pytest.approx(300.0)
     summary = aging.aging_summary(detail)
+    assert summary["Credits"].iloc[0] == pytest.approx(-200.0)   # still visible
+    assert summary["Total"].iloc[0] == pytest.approx(300.0)
+
+
+def test_credits_can_be_held_outside_buckets():
+    df = pd.DataFrame([_invoice(45, 500.0, "A"), _invoice(45, -200.0, "CM")])
+    detail, _ = aging.build_aging(df, AS_OF)
+    totals = aging.bucket_totals(detail, net_credits=False)
+    assert totals.loc[totals["Bucket"] == "31-60", "Amount"].iloc[0] == pytest.approx(500.0)
+    summary = aging.aging_summary(detail, net_credits=False)
     assert summary["Credits"].iloc[0] == pytest.approx(-200.0)
     assert summary["Total"].iloc[0] == pytest.approx(300.0)
+
+
+@pytest.mark.parametrize("dpd,expected", [
+    (120, "91-120"), (121, "121-150"), (150, "121-150"), (151, "151+"), (2000, "151+"),
+])
+def test_quickbooks_scheme_splits_the_tail(dpd, expected):
+    """QuickBooks reports 121-150 and 151+ separately where the standard scheme
+    lumps everything into 120+."""
+    assert aging.bucket_of(dpd, scheme="quickbooks") == expected
+    assert aging.bucket_of(dpd, scheme="standard") == "120+" if dpd > 120 else True
+
+
+def test_scheme_labels_differ():
+    assert aging.bucket_labels("standard")[-1] == "120+"
+    assert aging.bucket_labels("quickbooks")[-2:] == ["121-150", "151+"]
 
 
 def test_bucket_totals_percentages_sum_to_100():

@@ -44,6 +44,9 @@ def test_duplicate_headers_are_disambiguated():
     ("(500.00)", -500.00),        # accounting negative
     ("$(1,200.00)", -1200.00),
     ("1200-", -1200.00),          # trailing-minus convention
+    ("-1200", -1200.00),          # plain leading minus
+    ("-1,200,000.50", -1200000.50),
+    ("$-1,200.00", -1200.00),
     ("0", 0.0),
 ])
 def test_money_coercion(raw, expected):
@@ -161,3 +164,72 @@ def test_profile_round_trip(tmp_path, monkeypatch):
     mapping.save_profile("my export", payload)
     assert "my export" in mapping.list_profiles()
     assert mapping.load_profile("my export") == payload
+
+
+def test_combine_keeps_repeated_document_numbers_for_different_lines():
+    """QuickBooks writes one journal-entry number across several customer lines.
+    De-duplicating on the number alone would delete real balances."""
+    je = pd.DataFrame([
+        {"customer_id": "Allianz", "invoice_no": "2027",
+         "invoice_date": pd.Timestamp("2024-07-31"), "invoice_amount": -1_240_596.0,
+         "open_balance": -1_240_596.0},
+        {"customer_id": "Ayala", "invoice_no": "2027",
+         "invoice_date": pd.Timestamp("2024-07-31"), "invoice_amount": -67_200.0,
+         "open_balance": -67_200.0},
+        {"customer_id": "Cebuana", "invoice_no": "2027",
+         "invoice_date": pd.Timestamp("2024-07-31"), "invoice_amount": -688_800.0,
+         "open_balance": -688_800.0},
+    ])
+    other = pd.DataFrame([
+        {"customer_id": "Abbott", "invoice_no": "01134",
+         "invoice_date": pd.Timestamp("2022-12-12"), "invoice_amount": 171_360.0,
+         "open_balance": 13_725.21},
+    ])
+    combined, _ = mapping.combine([je, other], "invoices")
+    assert len(combined) == 4
+    assert combined["open_balance"].sum() == pytest.approx(-1_982_870.79)
+
+
+def test_combine_still_removes_true_duplicates():
+    """The same invoice exported twice is counted once."""
+    row = {"customer_id": "C1", "invoice_no": "INV-1",
+           "invoice_date": pd.Timestamp("2026-01-01"), "invoice_amount": 100.0,
+           "open_balance": 100.0}
+    a = pd.DataFrame([row])
+    b = pd.DataFrame([row])
+    combined, notes = mapping.combine([a, b], "invoices")
+    assert len(combined) == 1
+    assert any("more than one file" in n for n in notes)
+
+
+def test_combine_prefers_the_copy_that_carries_a_balance():
+    base = {"customer_id": "C1", "invoice_no": "INV-1",
+            "invoice_date": pd.Timestamp("2026-01-01"), "invoice_amount": 100.0}
+    without = pd.DataFrame([{**base, "open_balance": None}])
+    with_bal = pd.DataFrame([{**base, "open_balance": 42.0}])
+    combined, _ = mapping.combine([without, with_bal], "invoices")
+    assert len(combined) == 1
+    assert combined["open_balance"].iloc[0] == pytest.approx(42.0)
+
+
+def test_combine_preserves_identical_lines_within_one_file():
+    """Two byte-identical lines in a single export are two real postings -- a
+    journal entry split across lines. Only cross-file copies are duplicates."""
+    line = {"customer_id": "Jollibee", "invoice_no": "2838",
+            "invoice_date": pd.Timestamp("2026-01-01"), "invoice_amount": -996_702.0,
+            "open_balance": -996_702.0}
+    detail = pd.DataFrame([line, line])            # both real
+    collections = pd.DataFrame([line, line])       # the same two, re-exported
+    combined, _ = mapping.combine([detail, collections], "invoices")
+    assert len(combined) == 2
+    assert combined["open_balance"].sum() == pytest.approx(-1_993_404.0)
+
+
+def test_combine_dedupes_only_the_overlapping_occurrence():
+    line = {"customer_id": "C1", "invoice_no": "X",
+            "invoice_date": pd.Timestamp("2026-01-01"), "invoice_amount": 10.0,
+            "open_balance": 10.0}
+    three = pd.DataFrame([line, line, line])
+    one = pd.DataFrame([line])
+    combined, _ = mapping.combine([three, one], "invoices")
+    assert len(combined) == 3

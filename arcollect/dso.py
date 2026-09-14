@@ -12,6 +12,9 @@ import pandas as pd
 from . import aging, allocate
 from .util import month_end
 
+# Beyond two years a "days sales outstanding" is a denominator artefact.
+MAX_MEANINGFUL_DSO = 730.0
+
 
 def monthly_sales(sales: pd.DataFrame | None, invoices: pd.DataFrame | None = None
                   ) -> tuple[pd.DataFrame, list[str]]:
@@ -130,11 +133,24 @@ def dso_trend(invoices: pd.DataFrame, sales: pd.DataFrame | None,
 
     denom = df["credit_sales"].replace(0, np.nan)
     df["dso"] = df["total_ar"] / denom * df["days_in_period"]
-    df["best_possible_dso"] = df["current_ar"] / denom * df["days_in_period"]
+    df["best_possible_dso"] = (df["current_ar"] / denom * df["days_in_period"]).clip(lower=0)
     df["delinquent_dso"] = df["dso"] - df["best_possible_dso"]
 
     for col in ("dso", "best_possible_dso", "delinquent_dso"):
         df[col] = df[col].replace([np.inf, -np.inf], np.nan)
+
+    # A month whose sales are tiny next to the balance yields a ratio in the tens of
+    # thousands of days. That is an artefact of the denominator, not a receivables
+    # fact, and plotting it destroys the scale of every real point.
+    # A receivable cannot be collected in negative days; a negative ratio means the
+    # reconstructed balance went below zero on credit adjustments, not a real DSO.
+    implausible = (df["dso"] > MAX_MEANINGFUL_DSO) | (df["dso"] < 0)
+    if implausible.any():
+        df.loc[implausible, ["dso", "best_possible_dso", "delinquent_dso"]] = np.nan
+        notes.append(
+            f"{int(implausible.sum())} period(s) had sales too small next to the "
+            f"balance to give a meaningful DSO, or produced a negative ratio from "
+            f"credit adjustments; they are left blank rather than plotted.")
 
     if len(df) > 1:
         notes.append("The earliest period in the trend is understated: there is no "

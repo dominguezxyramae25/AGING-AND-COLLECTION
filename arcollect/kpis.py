@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from . import aging, collections, dso, quality
+from . import aging, allocate, collections, dso, quality
 
 
 @dataclass
@@ -31,6 +31,7 @@ class Analysis:
     payment_trend: pd.DataFrame
     risk: pd.DataFrame
     issues: pd.DataFrame
+    bucket_labels: list[str] = field(default_factory=list)
     kpis: dict = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
     settings: dict = field(default_factory=dict)
@@ -58,7 +59,9 @@ def build_analysis(invoices: pd.DataFrame,
                    as_of: pd.Timestamp | None = None,
                    default_terms: int = 30,
                    days_basis: str = "calendar",
-                   lookback_months: int = 12) -> Analysis:
+                   lookback_months: int = 12,
+                   scheme: str = aging.DEFAULT_SCHEME,
+                   net_credits: bool = True) -> Analysis:
     notes: list[str] = []
 
     invoices = invoices.copy()
@@ -85,13 +88,47 @@ def build_analysis(invoices: pd.DataFrame,
                 else:
                     invoices[col] = invoices[col].fillna(invoices["customer_id"].map(lookup[col]))
 
+    # A book split across exports (open items in one file, the settled ledger in
+    # another) leaves the settled rows with no balance column. Resolve those rows
+    # from an explicit paid flag when the export has one, and only fall back to
+    # allocating cash when it does not -- oldest-first allocation would otherwise
+    # apply this year's payments to last year's unpaid invoices.
+    if "open_balance" in invoices.columns and invoices["open_balance"].isna().any():
+        gaps = invoices["open_balance"].isna()
+
+        if "paid_status" in invoices.columns:
+            status = invoices.loc[gaps, "paid_status"].astype(str).str.strip().str.lower()
+            settled = status.isin({"paid", "closed", "settled", "cleared", "yes", "true"})
+            outstanding = status.isin({"unpaid", "open", "outstanding", "due", "no", "false"})
+            if settled.any():
+                invoices.loc[settled[settled].index, "open_balance"] = 0.0
+                notes.append(f"{int(settled.sum()):,} invoices were marked paid in the "
+                             f"file and carried no balance column; treated as settled.")
+            if outstanding.any():
+                idx = outstanding[outstanding].index
+                invoices.loc[idx, "open_balance"] = invoices.loc[idx, "invoice_amount"]
+            gaps = invoices["open_balance"].isna()
+
+        if gaps.any() and payments is not None and not payments.empty:
+            matched_fill, _ = allocate.allocate_payments(invoices, payments, default_terms)
+            if not matched_fill.empty:
+                applied = matched_fill.groupby("invoice_no")["allocation"].sum()
+                keys = invoices.loc[gaps, "invoice_no"].astype(str)
+                invoices.loc[gaps, "open_balance"] = (
+                    invoices.loc[gaps, "invoice_amount"].fillna(0.0)
+                    - keys.map(applied).fillna(0.0)).clip(lower=0.0)
+                notes.append(
+                    f"{int(gaps.sum()):,} invoices had neither a balance nor a paid flag; "
+                    f"cash was allocated oldest-first to estimate what is outstanding.")
+
     detail, aging_notes = aging.build_aging(invoices, as_of, payments,
-                                            default_terms=default_terms)
+                                            default_terms=default_terms, scheme=scheme)
     notes += aging_notes
 
-    buckets = aging.bucket_totals(detail)
-    customer_aging = aging.aging_summary(detail, by="customer_id")
-    segment_aging = (aging.aging_summary(detail, by="segment")
+    labels = aging.bucket_labels(scheme)
+    buckets = aging.bucket_totals(detail, scheme, net_credits)
+    customer_aging = aging.aging_summary(detail, "customer_id", scheme, net_credits)
+    segment_aging = (aging.aging_summary(detail, "segment", scheme, net_credits)
                      if "segment" in detail.columns and detail["segment"].notna().any()
                      else pd.DataFrame())
 
@@ -110,16 +147,20 @@ def build_analysis(invoices: pd.DataFrame,
     behavior = collections.payment_behavior(matched)
     pay_trend = collections.payment_trend(matched)
 
-    risk = collections.risk_ranking(detail, behavior, customers)
+    risk = collections.risk_ranking(detail, behavior, customers,
+                                    net_credits=net_credits, scheme=scheme)
     issues = quality.run_checks(invoices, payments, sales, customers, as_of)
 
     # --- headline KPIs ---------------------------------------------------------
     open_ar = detail.loc[~detail["is_credit"], "open_balance"].sum() if not detail.empty else 0.0
     credits = detail.loc[detail["is_credit"], "open_balance"].sum() if not detail.empty else 0.0
-    past_due = (detail.loc[detail["is_past_due"] & ~detail["is_credit"], "open_balance"].sum()
+    over_90_labels = [l for l in labels if l not in ("Current", "1-30", "31-60", "61-90")]
+    basis = detail if net_credits else detail.loc[~detail["is_credit"]]
+    reported_ar = float(basis["open_balance"].sum()) if not detail.empty else 0.0
+    past_due = (float(basis.loc[basis["is_past_due"], "open_balance"].sum())
                 if not detail.empty else 0.0)
-    over_90 = (detail.loc[detail["aging_bucket"].isin(["91-120", "120+"]) & ~detail["is_credit"],
-                          "open_balance"].sum() if not detail.empty else 0.0)
+    over_90 = (float(basis.loc[basis["aging_bucket"].isin(over_90_labels),
+                               "open_balance"].sum()) if not detail.empty else 0.0)
 
     kpis = {
         "as_of": as_of,
@@ -127,9 +168,10 @@ def build_analysis(invoices: pd.DataFrame,
         "gross_ar": float(open_ar),
         "credit_balances": float(credits),
         "past_due_ar": float(past_due),
-        "pct_past_due": float(past_due / open_ar * 100.0) if open_ar else 0.0,
+        "reported_ar": reported_ar,
+        "pct_past_due": float(past_due / reported_ar * 100.0) if reported_ar else 0.0,
         "over_90_ar": float(over_90),
-        "pct_over_90": float(over_90 / open_ar * 100.0) if open_ar else 0.0,
+        "pct_over_90": float(over_90 / reported_ar * 100.0) if reported_ar else 0.0,
         "open_invoices": int(len(detail)),
         "customers": int(detail["customer_id"].nunique()) if not detail.empty else 0,
         "dso": _latest(trend, "dso"),
@@ -147,19 +189,21 @@ def build_analysis(invoices: pd.DataFrame,
         "over_limit_exposure": (float(risk.loc[risk["over_limit"], "total_ar"].sum())
                                 if not risk.empty else 0.0),
         "top10_concentration": (float(risk.nlargest(10, "total_ar")["total_ar"].sum()
-                                      / open_ar * 100.0) if open_ar and not risk.empty else 0.0),
+                                      / reported_ar * 100.0) if reported_ar and not risk.empty else 0.0),
         "critical_accounts": (int((risk["risk_band"] == "Critical").sum())
                               if not risk.empty else 0),
     }
 
-    for label in aging.BUCKET_LABELS:
+    for label in labels:
         row = buckets.loc[buckets["Bucket"] == label]
         kpis[f"bucket_{label}"] = float(row["Amount"].iloc[0]) if not row.empty else 0.0
 
     settings = {
         "As-of date": as_of.date().isoformat(),
         "Aging basis": "Days past due date",
-        "Buckets": " / ".join(aging.BUCKET_LABELS),
+        "Buckets": " / ".join(labels) + f"  ({scheme} scheme)",
+        "Credit balances": ("Aged into their bucket, as an ERP aging report does"
+                            if net_credits else "Reported separately, outside the buckets"),
         "Default terms when none supplied": f"Net {default_terms}",
         "DSO method": f"Standard -- (AR / credit sales) x days in period ({days_basis})",
         "Customer DSO lookback": f"{lookback_months} months",
@@ -173,5 +217,6 @@ def build_analysis(invoices: pd.DataFrame,
         segment_aging=segment_aging, dso_trend=trend, dso_customer=dso_cust,
         dso_segment=dso_seg, cei=cei, matched_payments=matched, behavior=behavior,
         payment_trend=pay_trend, risk=risk, issues=issues, kpis=kpis,
+        bucket_labels=labels,
         notes=notes, settings=settings,
     )

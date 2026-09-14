@@ -15,6 +15,8 @@ import numpy as np
 import pandas as pd
 from dateutil import parser as dateparser
 
+from . import quickbooks
+
 MAX_HEADER_SCAN = 15
 _MONEY_STRIP = re.compile(r"[^\d\.\-\(\)]")
 _NUM_LIKE = re.compile(r"^-?[\d,]*\.?\d+$")
@@ -121,6 +123,12 @@ def read_table(source: str | Path | io.BytesIO, filename: str | None = None,
     df = df.reset_index(drop=True)
     # Drop rows and columns that are entirely blank.
     df = df.dropna(how="all").dropna(axis=1, how="all")
+
+    # QuickBooks-style grouped reports need their group headings pushed down onto
+    # the rows and their subtotal rows removed before anything downstream sees them.
+    df, meta = quickbooks.normalize(df)
+    if meta.get("grouped"):
+        df.attrs["quickbooks"] = meta
     return df
 
 
@@ -154,11 +162,15 @@ def to_money(series: pd.Series) -> pd.Series:
     negative |= text.str.endswith("-")
 
     cleaned = text.str.replace(_MONEY_STRIP, "", regex=True)
-    cleaned = cleaned.str.replace(r"[()\-]", "", regex=True)
-    cleaned = cleaned.replace({"": None, ".": None})
+    cleaned = cleaned.str.replace(r"[()]", "", regex=True)
+    # Strip ONLY a trailing minus. Removing every hyphen would turn a plain
+    # negative ("-1200000") into a positive and silently inflate the totals.
+    cleaned = cleaned.str.replace(r"-+$", "", regex=True)
+    cleaned = cleaned.replace({"": None, ".": None, "-": None})
 
-    magnitude = pd.to_numeric(cleaned, errors="coerce")
-    return (magnitude.abs() * np.where(negative, -1.0, 1.0)).astype(float)
+    value = pd.to_numeric(cleaned, errors="coerce")
+    return pd.Series(np.where(negative, -value.abs(), value),
+                     index=series.index, dtype="float64").astype(float)
 
 
 def to_number(series: pd.Series) -> pd.Series:

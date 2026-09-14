@@ -27,14 +27,33 @@ def run_checks(invoices: pd.DataFrame, payments: pd.DataFrame | None,
     if invoices is not None and not invoices.empty:
         inv = invoices
 
-        dupes = inv["invoice_no"].dropna()
-        dupe_mask = dupes.duplicated(keep=False)
-        if dupe_mask.any():
-            dupe_ids = dupes[dupe_mask]
+        # A repeated document number is only a problem when the whole line repeats.
+        # Accounting systems reuse one journal-entry number across customer lines,
+        # which is normal and must not be reported as double-counting.
+        key = [c for c in ("invoice_no", "customer_id", "invoice_date", "invoice_amount")
+               if c in inv.columns]
+        full_dupes = inv.duplicated(subset=key, keep=False) & inv["invoice_no"].notna()
+        if full_dupes.any():
+            examples = inv.loc[full_dupes, "invoice_no"].astype(str).unique()[:3]
             issues.append(_issue(
-                "Error", "invoices", "Duplicate invoice numbers", dupe_mask.sum(), None,
-                f"{dupe_ids.nunique():,} invoice numbers appear more than once "
-                f"(e.g. {', '.join(map(str, dupe_ids.unique()[:3]))}). Balances may be double-counted."))
+                "Error", "invoices", "Identical invoice lines appear more than once",
+                int(full_dupes.sum()),
+                float(inv.loc[full_dupes, "invoice_amount"].sum())
+                if "invoice_amount" in inv.columns else None,
+                f"Same number, customer, date and amount (e.g. "
+                f"{', '.join(examples)}). If these are not genuinely separate postings "
+                f"the balance is double-counted."))
+
+        number_only = (inv["invoice_no"].dropna().duplicated(keep=False)
+                       .reindex(inv.index, fill_value=False) & ~full_dupes)
+        if number_only.any():
+            examples = inv.loc[number_only, "invoice_no"].astype(str).unique()[:3]
+            issues.append(_issue(
+                "Info", "invoices", "Document number reused across lines",
+                int(number_only.sum()), None,
+                f"Numbers such as {', '.join(examples)} appear on several lines with "
+                f"different customers or amounts -- normal for journal entries. Each "
+                f"line is counted once."))
 
         missing_date = inv["invoice_date"].isna()
         if missing_date.any():
@@ -127,6 +146,33 @@ def run_checks(invoices: pd.DataFrame, payments: pd.DataFrame | None,
                 "Info", "payments", "Negative payments", negative.sum(),
                 float(payments.loc[negative, "payment_amount"].sum()),
                 "Reversals or NSF returns. Included at face value."))
+
+    if payments is not None and not payments.empty:
+        last_payment = pd.to_datetime(payments["payment_date"], errors="coerce").max()
+        if pd.notna(last_payment):
+            gap_days = (as_of - last_payment).days
+            if gap_days > 90:
+                issues.append(_issue(
+                    "Error", "payments", "Payment history stops well before the as-of date",
+                    len(payments), None,
+                    f"The last payment is {last_payment.date()}, {gap_days:,} days before "
+                    f"the {as_of.date()} as-of date. Aging is unaffected, but DSO, CEI, "
+                    f"days-to-pay and on-time rate all assume cash collection is recorded "
+                    f"up to the as-of date -- treat those four as unreliable until a "
+                    f"payment export covering the full period is supplied."))
+
+        matched_share = 0.0
+        if "invoice_no" in payments.columns and invoices is not None:
+            known = set(invoices["invoice_no"].dropna().astype(str))
+            refs = payments["invoice_no"].dropna().astype(str)
+            matched_share = refs.isin(known).mean() if len(refs) else 0.0
+        if matched_share < 0.2:
+            issues.append(_issue(
+                "Warning", "payments", "Payments cannot be tied to specific invoices",
+                len(payments), None,
+                "Receipts carry their own reference rather than the invoice number, so "
+                "cash is allocated oldest-first. Customer-level days-to-pay and on-time "
+                "rate are approximations."))
 
     if sales is not None and not sales.empty:
         negative = sales["credit_sales"] < 0

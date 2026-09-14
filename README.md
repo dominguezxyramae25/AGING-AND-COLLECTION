@@ -29,6 +29,28 @@ One file per dataset, Excel (`.xlsx` / `.xls`) or CSV. Only the first is require
 | **Monthly sales** | DSO trend | month, credit sales |
 | **Customer master** | Credit limits, segments, risk bands | customer, credit limit, terms |
 
+### QuickBooks and other grouped reports work as-is
+
+Accounting systems export A/R reports laid out for **printing**, not as data tables:
+the customer is a heading above the rows it owns, subtotal and "TOTAL" rows sit inside
+the grid, and a print timestamp trails the end. Read naively that yields null customers
+on every row and double-counted totals.
+
+The app detects that layout and rebuilds a real table — pushing each heading down onto
+its rows, dropping subtotal, total and timestamp rows, and splitting a combined
+"Invoices and Received Payments" ledger into its invoice and payment halves. Everything
+it changed is listed on screen before a single number is computed.
+
+It also reconciles: run it against a QuickBooks A/R Ageing Detail export and every
+bucket ties to that system's own A/R Ageing Summary to the cent. Pick the
+**QuickBooks bucket scheme** in the sidebar (it adds 121-150 and 151+) to match your
+existing reports line for line.
+
+Several exports can feed one dataset — open items in the Ageing Detail, settled ones in
+the payments ledger. They are stacked and de-duplicated **across files only**: two
+identical lines inside one export are two real postings (a journal entry split across
+customers reuses one document number), so within-file multiplicity is preserved.
+
 ### Your column names do not need to match anything
 
 The app reads whatever headers your export has, guesses the mapping, and shows you every
@@ -47,10 +69,13 @@ Save the mapping as a **profile** and next month's export is one click.
 
 ## What it calculates
 
-**AR Aging** — Current / 1–30 / 31–60 / 61–90 / 91–120 / 120+, on days past **due date**.
+**AR Aging** — Current / 1–30 / 31–60 / 61–90 / 91–120 / 120+ on days past **due date**,
+or the QuickBooks scheme (121–150, 151+) if that is what your system prints.
 Where an invoice has no due date it is derived from payment terms; every such fallback is
-recorded on the Assumptions tab and the Excel Assumptions sheet. Credit balances are
-reported separately rather than silently netted into buckets.
+recorded on the Assumptions tab and the Excel Assumptions sheet. Credit balances and negative
+adjustments are aged into their bucket by default, as an ERP aging report does, with the
+credit total always reported separately so it stays visible; a sidebar toggle holds them
+outside the buckets instead.
 
 **DSO** — Standard DSO `(AR ÷ credit sales) × days in period`, trended monthly, plus:
 - **Best Possible DSO**, using only current AR — the floor you would hit if nothing went late.
@@ -124,6 +149,14 @@ total matches the reconstructed AR at the as-of date.
 
 - **Multi-currency** is flagged but not converted. Filter to one currency, or convert
   before upload, if your export mixes them.
+- **Cash-based metrics need cash data that reaches the as-of date.** If the payment
+  export stops earlier, DSO, CEI, days-to-pay and on-time rate are computed on
+  incomplete collections. The app detects this, flags it on the dashboard and in the
+  PDF, and marks each affected tile — aging is unaffected.
+- **DSO needs a real sales figure.** Without a monthly sales file the denominator falls
+  back to invoiced amounts, which is a fair proxy only when invoicing is steady. Periods
+  where sales are tiny next to the balance (or the ratio turns negative on credit
+  adjustments) are left blank rather than plotted as a spike.
 - **Open-items-only exports** (no settled invoices) still give correct current aging, but
   the DSO and CEI trends for earlier months will understate AR. The app detects this and
   says so.

@@ -55,6 +55,7 @@ INVOICE_FIELDS: tuple[FieldSpec, ...] = (
         ("invoice no", "invoice number", "invoice id", "invoice", "inv no", "inv num",
          "invno", "document no", "document number", "doc no", "doc number", "doc id",
          "reference", "reference no", "ref no", "belnr", "transaction no", "trans no",
+         "transaction number", "txn no", "txn number", "number", "num",
          "voucher no", "bill no", "bill number"),
         "Unique invoice identifier; also used to match payments.",
     ),
@@ -95,10 +96,17 @@ INVOICE_FIELDS: tuple[FieldSpec, ...] = (
         "Credit terms in days (e.g. 30 for Net 30). Used to derive a missing due date.",
     ),
     FieldSpec(
+        "paid_status", "string", False,
+        ("a/r paid", "ar paid", "paid status", "payment status", "paid", "settled",
+         "open status", "invoice status", "status", "cleared"),
+        "Says whether the invoice is settled (e.g. Paid / Unpaid). Used to resolve a "
+        "missing open balance without guessing.",
+    ),
+    FieldSpec(
         "customer_name", "string", False,
-        ("customer name", "customer", "name", "cust name", "account name", "client",
-         "client name", "debtor name", "bp name", "business partner name", "company",
-         "company name", "sold to name"),
+        ("customer name", "customer full name", "customer", "name", "cust name",
+         "account name", "client", "client name", "debtor name", "bp name",
+         "business partner name", "company", "company name", "sold to name"),
     ),
     FieldSpec(
         "currency", "string", False,

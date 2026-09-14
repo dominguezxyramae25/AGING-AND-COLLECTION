@@ -11,8 +11,8 @@ from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
-from reportlab.platypus import (Image, PageBreak, Paragraph, SimpleDocTemplate,
-                                Spacer, Table, TableStyle)
+from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph,
+                                SimpleDocTemplate, Spacer, Table, TableStyle)
 
 from . import charts
 
@@ -165,32 +165,59 @@ def build_pdf(analysis, symbol: str = "$", entity: str = "") -> bytes:
     subtitle += f"  ·  Generated {pd.Timestamp.now():%Y-%m-%d %H:%M}"
     story.append(Paragraph(subtitle, st["sub"]))
 
+    stale_cash = (not analysis.issues.empty and analysis.issues["check"]
+                  .str.contains("Payment history stops", case=False, na=False).any())
+    if stale_cash:
+        story.append(Table(
+            [[Paragraph(
+                "<b>Cash-based metrics on this page are unreliable.</b> The payment "
+                "data supplied ends before the as-of date, so DSO, CEI, days-to-pay "
+                "and on-time rate are computed on incomplete collections. The aging "
+                "figures are unaffected.", st["note"])]],
+            colWidths=[7.0 * inch], hAlign="LEFT",
+            style=TableStyle([
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#fdf6e3")),
+                ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#d03b3b")),
+                ("LEFTPADDING", (0, 0), (-1, -1), 9),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 9),
+                ("TOPPADDING", (0, 0), (-1, -1), 7),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 7)])))
+        story.append(Spacer(1, 10))
+
     story.append(_kpi_grid(k, st, symbol))
 
-    story.append(Paragraph("AR aging profile", st["h2"]))
-    story.append(Image(charts.png_aging(analysis.bucket_totals, symbol),
-                       width=6.6 * inch, height=2.7 * inch))
+    story.append(KeepTogether([
+        Paragraph("AR aging profile", st["h2"]),
+        Image(charts.png_aging(analysis.bucket_totals, symbol),
+              width=6.6 * inch, height=2.7 * inch)]))
     story.append(Paragraph(
-        f"{_fmt_money(k['past_due_ar'], symbol)} of {_fmt_money(k['gross_ar'], symbol)} gross AR "
+        f"{_fmt_money(k['past_due_ar'], symbol)} of "
+        f"{_fmt_money(k.get('reported_ar', k['total_ar']), symbol)} "
         f"({k['pct_past_due']:.1f}%) is past due, of which "
         f"{_fmt_money(k['over_90_ar'], symbol)} ({k['pct_over_90']:.1f}% of AR) is over 90 days. "
-        f"Balance-weighted average days delinquent is {k['add_days']:.0f} days. "
-        f"(Gross AR excludes {_fmt_money(abs(k['credit_balances']), symbol)} of unapplied "
-        f"credit balances, which the Total AR figure nets off.)", st["body"]))
+        f"Balance-weighted average days delinquent is {k['add_days']:.0f} days."
+        + (f" The balance is net of {_fmt_money(abs(k['credit_balances']), symbol)} "
+           f"in credit balances and adjustments."
+           if k.get("credit_balances") else ""), st["body"]))
 
     if not analysis.dso_trend.empty:
-        story.append(Paragraph("Days Sales Outstanding", st["h2"]))
-        story.append(Image(charts.png_dso(analysis.dso_trend),
-                           width=6.6 * inch, height=2.5 * inch))
+        story.append(KeepTogether([
+            Paragraph("Days Sales Outstanding", st["h2"]),
+            Image(charts.png_dso(analysis.dso_trend),
+                  width=6.6 * inch, height=2.5 * inch)]))
         story.append(Paragraph(
             f"DSO is {_fmt_num(k['dso'])} days against a best-possible floor of "
             f"{_fmt_num(k['best_possible_dso'])} days. The {_fmt_num(k['delinquent_dso'])}-day "
             f"gap is delinquent DSO &mdash; the portion attributable to late payment rather "
-            f"than to credit terms, and the part collections activity can recover.", st["body"]))
+            f"than to credit terms, and the part collections activity can recover."
+            + (" Periods where sales were too small next to the balance to give a "
+               "meaningful ratio are left blank."
+               if analysis.dso_trend["dso"].isna().any() else ""), st["body"]))
 
     if not analysis.cei.empty:
-        story.append(Paragraph("Collection effectiveness", st["h2"]))
-        story.append(Image(charts.png_cei(analysis.cei), width=6.6 * inch, height=2.3 * inch))
+        story.append(KeepTogether([
+            Paragraph("Collection effectiveness", st["h2"]),
+            Image(charts.png_cei(analysis.cei), width=6.6 * inch, height=2.3 * inch)]))
         cei_value = k["cei"]
         verdict = ("above the 80% benchmark" if np.isfinite(cei_value) and cei_value >= 80
                    else "below the 80% benchmark")

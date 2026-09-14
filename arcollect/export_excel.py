@@ -7,7 +7,6 @@ import io
 import numpy as np
 import pandas as pd
 
-from .aging import BUCKET_LABELS
 from .charts import GRID, INK, INK_MUTED, SERIES
 
 HEADER_BG = "#1f3348"
@@ -52,7 +51,7 @@ _PCT_WORDS = ("%", "rate", "utilization", "pct", "cei", "concentration")
 _DAY_WORDS = ("days", "dso", "dpd", "add")
 
 
-def _fmt_for(column: str, fmts: dict):
+def _fmt_for(column: str, fmts: dict, bucket_labels: tuple[str, ...] = ()):
     c = str(column).lower()
     if c in ("period", "as_of_date", "invoice_date", "due_date", "payment_date"):
         return fmts["date"], 13
@@ -63,13 +62,14 @@ def _fmt_for(column: str, fmts: dict):
         return fmts["pct"], 13
     if any(w in c for w in _DAY_WORDS):
         return fmts["days"], 13
-    if c in BUCKET_LABELS or any(w in c for w in _MONEY_WORDS):
+    if column in bucket_labels or any(w in c for w in _MONEY_WORDS):
         return fmts["money"], 15
     return fmts["text"], 20
 
 
 def _write_table(writer, sheet_name: str, df: pd.DataFrame, fmts: dict,
-                 title: str = "", note: str = "", startrow: int = 0) -> None:
+                 title: str = "", note: str = "", startrow: int = 0,
+                 bucket_labels: tuple[str, ...] = ()) -> None:
     """Write a frame with a styled header, autofilter, frozen panes and column formats."""
     book = writer.book
     if sheet_name not in writer.sheets:
@@ -106,7 +106,7 @@ def _write_table(writer, sheet_name: str, df: pd.DataFrame, fmts: dict,
     ws.set_row(header_row, 30)
 
     for j, col in enumerate(clean.columns):
-        fmt, width = _fmt_for(col, fmts)
+        fmt, width = _fmt_for(col, fmts, bucket_labels)
         longest = max([len(str(col))] + [len(str(v)) for v in clean[col].head(200)])
         ws.set_column(j, j, max(width, min(longest + 2, 42)), fmt)
         # NaN/NaT must become None: xlsxwriter rejects NaN, and `.where(..., None)`
@@ -120,7 +120,7 @@ def _write_table(writer, sheet_name: str, df: pd.DataFrame, fmts: dict,
 
     # Colour-scale the bucket columns so deterioration is visible at a glance.
     for j, col in enumerate(clean.columns):
-        if str(col) in BUCKET_LABELS or str(col).lower() in ("% past due", "risk_score"):
+        if str(col) in bucket_labels or str(col).lower() in ("% past due", "risk_score"):
             ws.conditional_format(header_row + 1, j, last, j, {
                 "type": "2_color_scale", "min_color": "#ffffff", "max_color": "#f6b8b8"})
 
@@ -128,6 +128,7 @@ def _write_table(writer, sheet_name: str, df: pd.DataFrame, fmts: dict,
 def build_workbook(analysis, symbol: str = "$") -> bytes:
     """Render the whole analysis as a formatted .xlsx and return the bytes."""
     buffer = io.BytesIO()
+    labels = tuple(analysis.bucket_labels or [])
     with pd.ExcelWriter(buffer, engine="xlsxwriter",
                         datetime_format="yyyy-mm-dd", date_format="yyyy-mm-dd") as writer:
         book = writer.book
@@ -203,38 +204,38 @@ def build_workbook(analysis, symbol: str = "$") -> bytes:
 
         # ---- data sheets ------------------------------------------------------
         _write_table(writer, "01 Aging Summary", analysis.customer_aging, fmts,
-                     "Aging summary by customer", f"Open balances as of {as_of}.")
+                     "Aging summary by customer", f"Open balances as of {as_of}.", bucket_labels=labels)
         _write_table(writer, "02 Aging Detail", analysis.detail.drop(
             columns=[c for c in ("is_credit", "as_of_date", "due_date_source")
                      if c in analysis.detail.columns]), fmts,
                      "Aging detail by invoice",
-                     "One row per open invoice, with days past due and bucket.")
+                     "One row per open invoice, with days past due and bucket.", bucket_labels=labels)
         if not analysis.segment_aging.empty:
             _write_table(writer, "03 Aging by Segment", analysis.segment_aging, fmts,
-                         "Aging by segment")
+                         "Aging by segment", bucket_labels=labels)
         _write_table(writer, "04 DSO Trend", analysis.dso_trend, fmts,
                      "DSO trend",
                      "Standard DSO = (AR / credit sales) x days in period. "
-                     "BPDSO uses current AR only; the gap is delinquent DSO.")
+                     "BPDSO uses current AR only; the gap is delinquent DSO.", bucket_labels=labels)
         _write_table(writer, "05 DSO by Customer", analysis.dso_customer, fmts,
-                     "DSO by customer")
+                     "DSO by customer", bucket_labels=labels)
         if not analysis.dso_segment.empty:
             _write_table(writer, "06 DSO by Segment", analysis.dso_segment, fmts,
-                         "DSO by segment")
+                         "DSO by segment", bucket_labels=labels)
         _write_table(writer, "07 CEI", analysis.cei, fmts,
                      "Collection Effectiveness Index",
                      "CEI = (Begin AR + Credit Sales - End AR) / "
-                     "(Begin AR + Credit Sales - End Current AR). 100% is perfect.")
+                     "(Begin AR + Credit Sales - End Current AR). 100% is perfect.", bucket_labels=labels)
         _write_table(writer, "08 Days to Pay", analysis.behavior, fmts,
                      "Payment behaviour by customer",
-                     "Weighted by amount paid. Slippage is days to pay less terms.")
+                     "Weighted by amount paid. Slippage is days to pay less terms.", bucket_labels=labels)
         _write_table(writer, "09 Top Delinquent", analysis.risk, fmts,
                      "Delinquency risk ranking",
                      "Risk score weights: 30% past due, 25% age, 20% over-90, "
-                     "15% credit-limit use, 10% payment slippage.")
+                     "15% credit-limit use, 10% payment slippage.", bucket_labels=labels)
         _write_table(writer, "10 Data Quality", analysis.issues, fmts,
                      "Data quality findings",
-                     "Resolve Errors before relying on the totals above.")
+                     "Resolve Errors before relying on the totals above.", bucket_labels=labels)
 
         # ---- assumptions ------------------------------------------------------
         ws = book.add_worksheet("11 Assumptions")

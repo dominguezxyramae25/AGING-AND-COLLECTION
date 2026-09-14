@@ -113,8 +113,9 @@ def _scale(series: pd.Series, cap: float | None = None) -> pd.Series:
 
 
 def risk_ranking(detail: pd.DataFrame, behavior: pd.DataFrame | None = None,
-                 customers: pd.DataFrame | None = None, top_n: int | None = None
-                 ) -> pd.DataFrame:
+                 customers: pd.DataFrame | None = None, top_n: int | None = None,
+                 net_credits: bool = True,
+                 scheme: str = aging.DEFAULT_SCHEME) -> pd.DataFrame:
     """Rank customers by collection risk, showing the drivers behind each score.
 
     The composite weights five signals. Every component is kept in the output --
@@ -123,7 +124,9 @@ def risk_ranking(detail: pd.DataFrame, behavior: pd.DataFrame | None = None,
     if detail.empty:
         return pd.DataFrame()
 
-    open_ar = detail.loc[~detail["is_credit"]]
+    # Follow the same basis as the aging table. Ignoring credits here would rank a
+    # clearing account whose debits and credits cancel as the largest exposure.
+    open_ar = detail if net_credits else detail.loc[~detail["is_credit"]]
     grp = open_ar.groupby("customer_id")
 
     out = pd.DataFrame({"customer_id": grp.size().index})
@@ -135,13 +138,17 @@ def risk_ranking(detail: pd.DataFrame, behavior: pd.DataFrame | None = None,
                                    out["past_due_ar"] / out["total_ar"] * 100.0, 0.0)
     out["open_invoices"] = grp.size().to_numpy()
 
-    for label in aging.BUCKET_LABELS:
+    labels = aging.bucket_labels(scheme)
+    for label in labels:
         amounts = (open_ar.loc[open_ar["aging_bucket"] == label]
                    .groupby("customer_id")["open_balance"].sum()
                    .reindex(out["customer_id"]).fillna(0.0))
         out[label] = amounts.to_numpy()
 
-    out["over_90"] = out["91-120"] + out["120+"]
+    # Everything past the 61-90 band, whatever the scheme calls those buckets.
+    over_90_labels = [l for l in labels
+                      if l not in ("Current", "1-30", "31-60", "61-90")]
+    out["over_90"] = out[over_90_labels].sum(axis=1)
     out["add_days"] = [
         aging.weighted_average_days_delinquent(open_ar.loc[open_ar["customer_id"] == c])
         for c in out["customer_id"]
@@ -187,6 +194,8 @@ def risk_ranking(detail: pd.DataFrame, behavior: pd.DataFrame | None = None,
     # Exposure is what actually needs working: risk weighted by dollars at stake.
     out["exposure"] = (out["risk_score"] / 100.0 * out["past_due_ar"]).round(2)
 
+    # An account whose debits and credits cancel carries no exposure to work.
+    out = out.loc[out["total_ar"].abs() > 0.005].copy()
     out = out.sort_values(["exposure", "past_due_ar"], ascending=False).reset_index(drop=True)
     out.insert(0, "rank", np.arange(1, len(out) + 1))
     return out.head(top_n) if top_n else out

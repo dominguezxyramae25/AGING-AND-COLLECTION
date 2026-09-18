@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from . import aging, allocate, collections, dso, quality
+from . import aging, allocate, collections, dso, quality, worklist
 
 
 @dataclass
@@ -31,6 +31,8 @@ class Analysis:
     payment_trend: pd.DataFrame
     risk: pd.DataFrame
     issues: pd.DataFrame
+    worklist: pd.DataFrame = field(default_factory=pd.DataFrame)
+    worklist_invoices: pd.DataFrame = field(default_factory=pd.DataFrame)
     bucket_labels: list[str] = field(default_factory=list)
     kpis: dict = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
@@ -61,7 +63,9 @@ def build_analysis(invoices: pd.DataFrame,
                    days_basis: str = "calendar",
                    lookback_months: int = 12,
                    scheme: str = aging.DEFAULT_SCHEME,
-                   net_credits: bool = True) -> Analysis:
+                   net_credits: bool = True,
+                   stage_overrides: dict[str, str] | None = None,
+                   exclude_accounts: tuple[str, ...] = ()) -> Analysis:
     notes: list[str] = []
 
     invoices = invoices.copy()
@@ -150,6 +154,10 @@ def build_analysis(invoices: pd.DataFrame,
     risk = collections.risk_ranking(detail, behavior, customers,
                                     net_credits=net_credits, scheme=scheme)
 
+    queue, queue_invoices, queue_notes = worklist.build_worklist(
+        detail, risk, as_of, scheme, stage_overrides, exclude_accounts)
+    notes += queue_notes
+
     # Several modules can reach the same conclusion (a missing sales file is
     # noticed by both the trend and the per-customer view); say it once.
     notes = list(dict.fromkeys(notes))
@@ -196,6 +204,9 @@ def build_analysis(invoices: pd.DataFrame,
                                       / reported_ar * 100.0) if reported_ar and not risk.empty else 0.0),
         "critical_accounts": (int((risk["risk_band"] == "Critical").sum())
                               if not risk.empty else 0),
+        "accounts_to_chase": int(len(queue)),
+        "amount_to_chase": (float(queue["amount_due_now"].sum())
+                            if not queue.empty else 0.0),
     }
 
     for label in labels:
@@ -212,6 +223,8 @@ def build_analysis(invoices: pd.DataFrame,
         "DSO method": f"Standard -- (AR / credit sales) x days in period ({days_basis})",
         "Customer DSO lookback": f"{lookback_months} months",
         "CEI formula": "(Begin AR + Credit Sales - End AR) / (Begin AR + Credit Sales - End Current AR)",
+        "Escalation ladder": " \u2192 ".join(
+            worklist.STAGES[k].label for k in worklist.STAGE_ORDER[1:]),
         "Payment matching": ("Invoice reference where present, otherwise FIFO by customer"
                              if not matched.empty else "Not available"),
     }
@@ -220,7 +233,8 @@ def build_analysis(invoices: pd.DataFrame,
         as_of=as_of, detail=detail, bucket_totals=buckets, customer_aging=customer_aging,
         segment_aging=segment_aging, dso_trend=trend, dso_customer=dso_cust,
         dso_segment=dso_seg, cei=cei, matched_payments=matched, behavior=behavior,
-        payment_trend=pay_trend, risk=risk, issues=issues, kpis=kpis,
+        payment_trend=pay_trend, risk=risk, issues=issues,
+        worklist=queue, worklist_invoices=queue_invoices, kpis=kpis,
         bucket_labels=labels,
         notes=notes, settings=settings,
     )

@@ -246,13 +246,22 @@ def build_workbook(analysis, symbol: str = "$") -> bytes:
                      "Delinquency risk ranking",
                      "Risk score weights: 30% past due, 25% age, 20% over-90, "
                      "15% credit-limit use, 10% payment slippage.", bucket_labels=labels)
-        _write_table(writer, "10 Data Quality", analysis.issues, fmts,
+        _write_table(writer, "10 Collection Worklist", analysis.worklist, fmts,
+                     "Collection worklist",
+                     "Accounts to chase, in priority order. Amount due now is net of "
+                     "past-due credits. Accounts that net to nil are excluded.",
+                     bucket_labels=labels)
+        _write_table(writer, "11 Chase List", analysis.worklist_invoices, fmts,
+                     "Invoices to chase",
+                     "The specific documents behind each account on the worklist.",
+                     bucket_labels=labels)
+        _write_table(writer, "12 Data Quality", analysis.issues, fmts,
                      "Data quality findings",
                      "Resolve Errors before relying on the totals above.", bucket_labels=labels)
 
         # ---- assumptions ------------------------------------------------------
-        ws = book.add_worksheet("11 Assumptions")
-        writer.sheets["11 Assumptions"] = ws
+        ws = book.add_worksheet("13 Assumptions")
+        writer.sheets["13 Assumptions"] = ws
         ws.hide_gridlines(2)
         ws.set_column(0, 0, 34)
         ws.set_column(1, 1, 90)

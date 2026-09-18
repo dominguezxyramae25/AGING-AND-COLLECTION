@@ -116,6 +116,20 @@ outside the buckets instead.
 Monthly history for DSO and CEI is reconstructed by replaying invoice and payment activity,
 so the AR balance at each month end is split into current and past due as it stood *then*.
 
+**Collection worklist** — who to chase, in priority order, with the escalation stage set
+by each account's *oldest unpaid* invoice: reminder → first notice → second notice → final
+demand → escalate. "Due now" is **net of past-due credits**, so a demand never bills for an
+invoice a credit note already settled. Accounts that net to nil, and clearing or adjustment
+accounts, are excluded — and every exclusion is listed rather than silently dropped.
+
+**Collection letters and statements** — a demand letter worded for the account's stage, and
+a statement of account listing every open item, as PDFs. Download one, or a ZIP of the
+whole worklist. Wording lives in one `STAGE_COPY` table so tone is reviewable in one place.
+
+> The app **generates** documents. It never sends anything and has no network path. Every
+> letter is marked a draft for you to check, sign and send yourself. Where no address is on
+> file, the letter shows a visible placeholder rather than looking complete but unpostable.
+
 **Data quality** runs before any metric is shown: duplicate invoices, balances exceeding
 invoice amounts, missing or reversed dates, payments matching no invoice, mixed currencies,
 customers missing from the master. Errors are flagged on the dashboard, because a

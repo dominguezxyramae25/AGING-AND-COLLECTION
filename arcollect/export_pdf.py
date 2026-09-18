@@ -281,3 +281,11 @@ def build_pdf(analysis, symbol: str = "$", entity: str = "") -> bytes:
     doc.build(story, onFirstPage=_footer, onLaterPages=_footer)
     buffer.seek(0)
     return buffer.getvalue()
+
+
+# Public aliases so sibling modules (letters.py) can build documents that match this
+# report's furniture instead of duplicating it.
+styles = _styles
+data_table = _data_table
+page_footer = _footer
+fmt_money = _fmt_money

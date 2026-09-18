@@ -197,6 +197,29 @@ CUSTOMER_FIELDS: tuple[FieldSpec, ...] = (
         ("risk rating", "risk", "rating", "credit rating", "risk class", "risk score",
          "credit score", "grade", "credit grade"),
     ),
+    # Contact details are only used to address collection letters and statements.
+    FieldSpec(
+        "contact_name", "string", False,
+        ("contact name", "contact", "attention", "attn", "contact person",
+         "ap contact", "accounts payable contact", "billing contact", "primary contact"),
+        "Who collection letters should be addressed to.",
+    ),
+    FieldSpec(
+        "email", "string", False,
+        ("email", "e-mail", "email address", "contact email", "billing email",
+         "ap email", "mail"),
+    ),
+    FieldSpec(
+        "phone", "string", False,
+        ("phone", "telephone", "tel", "phone number", "contact number", "mobile",
+         "contact no", "landline"),
+    ),
+    FieldSpec(
+        "address", "string", False,
+        ("address", "billing address", "mailing address", "street address",
+         "postal address", "address line 1", "location"),
+        "Postal address for letters. Left blank, letters show a visible placeholder.",
+    ),
 )
 
 ROLE_FIELDS: dict[str, tuple[FieldSpec, ...]] = {

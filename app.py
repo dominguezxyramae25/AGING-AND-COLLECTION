@@ -13,7 +13,7 @@ import pandas as pd
 import streamlit as st
 
 from arcollect import (aging, charts, export_excel, export_pdf, ingest, kpis,
-                       mapping, quickbooks)
+                       letters, mapping, quickbooks, worklist)
 from arcollect.schema import ROLE_LABELS, ROLES, fields_for, required_fields
 
 APP_DIR = Path(__file__).resolve().parent
@@ -278,6 +278,32 @@ days_basis = st.sidebar.radio("Days in period for DSO", ["calendar", "30"],
                               help="'calendar' uses actual days in each month.")
 lookback = st.sidebar.slider("Customer DSO lookback (months)", 3, 24, 12)
 
+st.sidebar.divider()
+st.sidebar.subheader("Collection letters")
+_saved_sender = mapping.load_profile("sender") or {}
+with st.sidebar.expander("Your details (letterhead)", expanded=not _saved_sender):
+    st.caption("Used only to head the letters this app generates. Nothing is sent.")
+    sender_fields = {
+        "company": st.text_input("Company name *", _saved_sender.get("company", "")),
+        "address": st.text_area("Address", _saved_sender.get("address", ""), height=70),
+        "tax_id": st.text_input("TIN / registration", _saved_sender.get("tax_id", "")),
+        "contact_name": st.text_input("Signed by", _saved_sender.get("contact_name", "")),
+        "contact_title": st.text_input("Title", _saved_sender.get("contact_title", "")),
+        "email": st.text_input("Email", _saved_sender.get("email", "")),
+        "phone": st.text_input("Phone", _saved_sender.get("phone", "")),
+        "remittance": st.text_area("Remittance instructions",
+                                   _saved_sender.get("remittance", ""), height=70),
+    }
+    if st.button("Save details", use_container_width=True):
+        mapping.save_profile("sender", sender_fields)
+        st.success("Saved.")
+sender = letters.Sender.from_dict(sender_fields)
+
+exclusions = st.sidebar.text_input(
+    "Exclude accounts containing", "",
+    help="Comma-separated. Clearing and adjustment accounts are already skipped.")
+exclude_accounts = tuple(x.strip() for x in exclusions.split(",") if x.strip())
+
 if blocking:
     st.title("AR Aging & Collections Analytics")
     for message in blocking:
@@ -301,7 +327,8 @@ with st.spinner("Analysing…"):
         invoices, frames.get("payments"), frames.get("sales"), frames.get("customers"),
         as_of=pd.Timestamp(as_of), default_terms=int(default_terms),
         days_basis=days_basis, lookback_months=int(lookback),
-        scheme=scheme, net_credits=net_credits)
+        scheme=scheme, net_credits=net_credits,
+        exclude_accounts=exclude_accounts)
 analysis.notes = qb_notes + all_notes + analysis.notes
 
 k = analysis.kpis
@@ -389,15 +416,15 @@ _metric(row2[1], "Avg days to pay", _fmt(k["avg_days_to_pay"], " d"),
 _metric(row2[2], "On-time payment rate", _fmt(k["on_time_rate"], "%"),
         CASH_WARNING if stale_cash else "paid by due date")
 _metric(row2[3], "Avg days delinquent", _fmt(k["add_days"], " d"), "balance-weighted")
-_metric(row2[4], "Over credit limit", f"{k['over_limit_customers']:,}",
-        f"{_fmt_money(k['over_limit_exposure'], symbol)} exposed")
+_metric(row2[4], "Accounts to chase", f"{k['accounts_to_chase']:,}",
+        f"{_fmt_money(k['amount_to_chase'], symbol)} collectable now")
 
 # --------------------------------------------------------------------------------------
 # Tabs
 # --------------------------------------------------------------------------------------
 
-tabs = st.tabs(["AR Aging", "Collection Analysis", "DSO", "Customer Detail",
-                "Data Quality", "Assumptions"])
+tabs = st.tabs(["AR Aging", "Worklist", "Collection Analysis", "DSO",
+                "Customer Detail", "Data Quality", "Assumptions"])
 
 # ---- AR Aging ----
 with tabs[0]:
@@ -438,8 +465,109 @@ with tabs[0]:
     with st.expander("Invoice-level aging detail"):
         st.dataframe(analysis.detail, use_container_width=True, hide_index=True, height=420)
 
-# ---- Collection Analysis ----
+# ---- Worklist ----
 with tabs[1]:
+    queue = analysis.worklist
+    if queue.empty:
+        st.success("Nothing is past due. There is no one to chase.", icon="✅")
+        skipped = [n for n in analysis.notes if n.startswith("Excluded")]
+        if skipped:
+            with st.expander(f"{len(skipped)} account(s) deliberately left out"):
+                for note in skipped:
+                    st.markdown(f"- {note}")
+    else:
+        head = st.columns([2, 1])
+        head[0].subheader("Who to chase, in order")
+        head[0].caption(
+            f"{len(queue):,} account(s) carrying {_fmt_money(k['amount_to_chase'], symbol)} "
+            f"collectable now. Amounts are net of past-due credits, so a demand never "
+            f"bills for an invoice a credit note already settled.")
+
+        summary = worklist.stage_summary(queue)
+        st.dataframe(summary, use_container_width=True, hide_index=True,
+                     column_config={
+                         "Amount": st.column_config.NumberColumn(
+                             format=_money_format(symbol)),
+                         "Accounts": st.column_config.NumberColumn(format="%d")})
+
+        stages = list(queue["stage_label"].unique())
+        picked = st.multiselect("Show stages", stages, default=stages)
+        shown = queue.loc[queue["stage_label"].isin(picked)]
+
+        st.dataframe(
+            shown[["priority", "customer_name", "stage_label", "action",
+                   "amount_due_now", "oldest_dpd", "invoices_to_chase",
+                   "risk_band", "response_by"]],
+            use_container_width=True, hide_index=True, height=360,
+            column_config={
+                "priority": st.column_config.NumberColumn("#", format="%d"),
+                "customer_name": st.column_config.TextColumn("Customer", width="medium"),
+                "stage_label": st.column_config.TextColumn("Stage"),
+                "action": st.column_config.TextColumn("Next action", width="medium"),
+                "amount_due_now": st.column_config.NumberColumn(
+                    "Due now", format=_money_format(symbol)),
+                "oldest_dpd": st.column_config.NumberColumn("Oldest", format="%d d"),
+                "invoices_to_chase": st.column_config.NumberColumn("Invoices", format="%d"),
+                "risk_band": st.column_config.TextColumn("Risk"),
+                "response_by": st.column_config.DateColumn("Respond by")})
+
+        st.subheader("Letters")
+        if not sender.ready:
+            st.info("Add your company name under **Collection letters → Your details** "
+                    "in the sidebar to generate letters.", icon="✉️")
+        else:
+            st.caption("Every document is a draft. This app generates them; it never "
+                       "sends anything.")
+            packs = st.columns(2)
+            packs[0].download_button(
+                f"⬇  All demand letters ({len(queue)} PDFs, ZIP)",
+                data=letters.letter_pack(analysis, sender, symbol,
+                                         frames.get("customers"), "letters"),
+                file_name=f"collection_letters_{analysis.as_of:%Y%m%d}.zip",
+                mime="application/zip", use_container_width=True)
+            packs[1].download_button(
+                f"⬇  All statements ({len(queue)} PDFs, ZIP)",
+                data=letters.letter_pack(analysis, sender, symbol,
+                                         frames.get("customers"), "statements"),
+                file_name=f"statements_{analysis.as_of:%Y%m%d}.zip",
+                mime="application/zip", use_container_width=True)
+
+            names = {row["customer_id"]: f"{int(row['priority'])}. {row['customer_name']}"
+                     for _, row in queue.iterrows()}
+            chosen = st.selectbox("Single account", list(names),
+                                  format_func=lambda c: names[c])
+            row = queue.loc[queue["customer_id"] == chosen].iloc[0]
+            safe = letters._safe(str(row["customer_name"]))
+            one = st.columns(2)
+            one[0].download_button(
+                "⬇  Demand letter",
+                data=letters.demand_letter(analysis, row, sender, symbol,
+                                           frames.get("customers")),
+                file_name=f"{row['stage']}_{safe}.pdf", mime="application/pdf",
+                use_container_width=True)
+            one[1].download_button(
+                "⬇  Statement of account",
+                data=letters.statement_of_account(analysis, chosen, sender, symbol,
+                                                  frames.get("customers")),
+                file_name=f"statement_{safe}.pdf", mime="application/pdf",
+                use_container_width=True)
+
+            chase = analysis.worklist_invoices
+            mine = chase.loc[chase["customer_id"] == chosen]
+            st.caption(f"{len(mine)} overdue invoice(s) behind this letter — "
+                       f"{_fmt_money(row['amount_due_now'], symbol)} due now"
+                       + (f", after {_fmt_money(abs(row['past_due_credits']), symbol)} "
+                          f"of credits" if row.get("past_due_credits") else ""))
+            st.dataframe(mine, use_container_width=True, hide_index=True, height=260)
+
+        skipped = [n for n in analysis.notes if n.startswith("Excluded")]
+        if skipped:
+            with st.expander(f"{len(skipped)} account(s) deliberately left out"):
+                for note in skipped:
+                    st.markdown(f"- {note}")
+
+# ---- Collection Analysis ----
+with tabs[2]:
     if analysis.cei.empty:
         st.info("CEI needs at least two months of invoice history plus payments.", icon="ℹ️")
     else:
@@ -485,7 +613,7 @@ with tabs[1]:
                    "invoice's own terms — positive means the customer runs past terms.")
 
 # ---- DSO ----
-with tabs[2]:
+with tabs[3]:
     if analysis.dso_trend.empty:
         st.info("DSO needs monthly sales, or invoices spanning more than one month.",
                 icon="ℹ️")
@@ -510,7 +638,7 @@ with tabs[2]:
         st.dataframe(analysis.dso_segment, use_container_width=True, hide_index=True)
 
 # ---- Customer Detail ----
-with tabs[3]:
+with tabs[4]:
     detail = analysis.detail
     names = (detail[["customer_id", "customer_name"]].drop_duplicates()
              if "customer_name" in detail.columns
@@ -549,7 +677,7 @@ with tabs[3]:
                      use_container_width=True, hide_index=True, height=420)
 
 # ---- Data Quality ----
-with tabs[4]:
+with tabs[5]:
     if analysis.issues.empty:
         st.success("No data-quality issues found.", icon="✅")
     else:
@@ -566,7 +694,7 @@ with tabs[4]:
                    "numbers materially. Warnings and info are usually expected.")
 
 # ---- Assumptions ----
-with tabs[5]:
+with tabs[6]:
     st.subheader("Methodology")
     st.dataframe(pd.DataFrame({"Item": list(analysis.settings.keys()),
                                "Basis": [str(v) for v in analysis.settings.values()]}),

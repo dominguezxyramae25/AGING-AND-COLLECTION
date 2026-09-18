@@ -1,0 +1,17 @@
+# The app pins a light theme so the dashboard, the Excel workbook and the PDF all
+# render against the one surface the chart palette was validated against.
+[theme]
+base = "light"
+primaryColor = "#2a78d6"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f4f6f9"
+textColor = "#0b0b0b"
+
+[server]
+headless = true
+address = "127.0.0.1"
+fileWatcherType = "auto"
+maxUploadSize = 400
+
+[browser]
+gatherUsageStats = false

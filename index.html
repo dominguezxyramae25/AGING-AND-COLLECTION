@@ -28,6 +28,14 @@
       <button type="button" class="level-btn" data-level="Advanced" aria-pressed="false">Advanced</button>
     </nav>
 
+    <div class="toolbar">
+      <label class="switch">
+        <input type="checkbox" id="shuffle">
+        <span class="switch-track" aria-hidden="true"></span>
+        <span>Shuffle order</span>
+      </label>
+    </div>
+
     <section class="card scenario" aria-labelledby="scenario-heading">
       <div class="scenario-meta">
         <span id="scenario-level" class="tag"></span>
@@ -76,10 +84,21 @@
       <p id="explanation"></p>
     </section>
 
-    <div class="actions">
+    <div id="actions" class="actions">
       <button type="button" id="try-again" class="btn btn-secondary">Try again</button>
       <button type="button" id="next" class="btn btn-primary">Next scenario</button>
     </div>
+
+    <section id="summary" class="card summary" aria-labelledby="summary-heading" hidden>
+      <h2 id="summary-heading" class="result-headline"></h2>
+      <p id="summary-score" class="summary-score"></p>
+      <p id="summary-detail" class="muted small"></p>
+      <ol id="summary-list" class="summary-list"></ol>
+      <div class="actions">
+        <button type="button" id="retry-missed" class="btn btn-primary">Retry missed</button>
+        <button type="button" id="start-over" class="btn btn-secondary">Start over</button>
+      </div>
+    </section>
 
     <p class="footer-links">
       <button type="button" id="reset-score" class="link-btn">Reset score</button>

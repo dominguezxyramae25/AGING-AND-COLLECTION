@@ -115,8 +115,12 @@
 
   var state = {
     level: "All",
-    order: [],        // indexes into scenarios for the current level
+    shuffle: false,
+    order: [],        // indexes into scenarios for the current round
     pos: 0,           // position within order
+    review: false,    // true when retrying only the missed scenarios
+    roundResults: {}, // scenario index -> true/false (first check in this round)
+    toRetry: [],      // missed or skipped scenarios from the last round
     checked: false,
     firstResult: {},  // scenario index -> true/false (first check only)
     correct: 0,
@@ -258,25 +262,107 @@
 
   // ---------- Scenario display ----------
 
-  function buildOrder() {
-    state.order = [];
+  // Indexes of all scenarios in the selected level, in file order.
+  function levelIndexes() {
+    var list = [];
     scenarios.forEach(function (s, i) {
-      if (state.level === "All" || s.level === state.level) state.order.push(i);
+      if (state.level === "All" || s.level === state.level) list.push(i);
     });
+    return list;
+  }
+
+  function shuffled(list) {
+    var a = list.slice();
+    for (var i = a.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var t = a[i]; a[i] = a[j]; a[j] = t;
+    }
+    return a;
+  }
+
+  // A round is one pass through a list of scenarios, ending with a summary.
+  function startRound(indexes, review) {
+    state.order = state.shuffle ? shuffled(indexes) : indexes.slice();
     state.pos = 0;
+    state.review = !!review;
+    state.roundResults = {};
+    setSummaryVisible(false);
+    showScenario();
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function currentIndex() { return state.order[state.pos]; }
 
-  function showScenario(note) {
+  function showScenario() {
     var s = scenarios[currentIndex()];
+    var total = state.order.length;
     $("scenario-level").textContent = s.level;
-    $("scenario-progress").textContent = "Scenario " + (state.pos + 1) + " of " + state.order.length;
+    $("scenario-progress").textContent = (state.review ? "Review " : "Scenario ") + (state.pos + 1) + " of " + total;
     $("scenario-text").textContent = s.text;
     var noteEl = $("scenario-note");
-    noteEl.textContent = note || "";
-    noteEl.hidden = !note;
+    noteEl.textContent = state.review ? "Review round: only the scenarios you missed or skipped." : "";
+    noteEl.hidden = !state.review;
+    nextBtn.textContent = state.pos === total - 1 ? "See results" : "Next scenario";
     resetEntry();
+  }
+
+  // ---------- End-of-round summary ----------
+
+  function setSummaryVisible(visible) {
+    $("summary").hidden = !visible;
+    document.querySelector(".scenario").hidden = visible;
+    document.querySelector(".entry").hidden = visible;
+    $("actions").hidden = visible;
+    if (visible) feedbackEl.hidden = true;
+  }
+
+  function showSummary() {
+    var right = [], missed = [], skipped = [];
+    state.order.forEach(function (i) {
+      if (state.roundResults[i] === true) right.push(i);
+      else if (state.roundResults[i] === false) missed.push(i);
+      else skipped.push(i);
+    });
+    var total = state.order.length;
+
+    $("summary-heading").textContent = right.length === total
+      ? "\u2705 Perfect round!"
+      : (state.review ? "Review complete" : "Round complete");
+    $("summary-score").textContent = right.length + " of " + total + " correct on the first try";
+
+    var detail = [];
+    if (missed.length) detail.push(missed.length + " missed");
+    if (skipped.length) detail.push(skipped.length + " skipped");
+    $("summary-detail").textContent = detail.length
+      ? detail.join(", ") + ". Retry them below, or start the whole set again."
+      : "You answered every scenario correctly on your first try.";
+
+    var list = $("summary-list");
+    list.innerHTML = "";
+    state.order.forEach(function (i) {
+      var result = state.roundResults[i];
+      var status = result === true ? "ok" : (result === false ? "bad" : "skip");
+      var li = el("li", { className: status });
+      li.appendChild(el("span", { className: "icon", "aria-hidden": "true" },
+        status === "ok" ? "\u2713" : (status === "bad" ? "\u2717" : "\u2013")));
+      var body = el("span", { className: "summary-text" });
+      body.appendChild(el("span", { className: "sr-only" },
+        status === "ok" ? "Correct: " : (status === "bad" ? "Missed: " : "Skipped: ")));
+      body.appendChild(document.createTextNode(scenarios[i].text));
+      body.appendChild(el("span", { className: "summary-level" }, scenarios[i].level));
+      li.appendChild(body);
+      list.appendChild(li);
+    });
+
+    var toRetry = missed.concat(skipped);
+    var retryBtn = $("retry-missed");
+    retryBtn.hidden = toRetry.length === 0;
+    retryBtn.textContent = "Retry missed (" + toRetry.length + ")";
+    $("start-over").className = "btn " + (toRetry.length ? "btn-secondary" : "btn-primary");
+
+    state.toRetry = toRetry.sort(function (a, b) { return a - b; });
+    setSummaryVisible(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   // ---------- Checking ----------
@@ -391,6 +477,9 @@
       updateScore();
     }
 
+    // Round summary: only the first check in this round counts.
+    if (!(idx in state.roundResults)) state.roundResults[idx] = allCorrect;
+
     renderFeedback(scenario, correct, items, allCorrect, isFirst);
     state.checked = true;
     setLocked(true);
@@ -478,14 +567,26 @@
   });
 
   nextBtn.addEventListener("click", function () {
-    var note = "";
-    state.pos += 1;
-    if (state.pos >= state.order.length) {
-      state.pos = 0;
-      note = "You have gone through all the scenarios in this set. Starting again from the first one.";
+    if (state.pos >= state.order.length - 1) {
+      showSummary();
+      return;
     }
-    showScenario(note);
+    state.pos += 1;
+    showScenario();
     window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+
+  $("retry-missed").addEventListener("click", function () {
+    startRound(state.toRetry, true);
+  });
+
+  $("start-over").addEventListener("click", function () {
+    startRound(levelIndexes());
+  });
+
+  $("shuffle").addEventListener("change", function () {
+    state.shuffle = this.checked;
+    startRound(levelIndexes());
   });
 
   document.querySelectorAll(".level-btn").forEach(function (btn) {
@@ -494,8 +595,7 @@
         b.setAttribute("aria-pressed", b === btn ? "true" : "false");
       });
       state.level = btn.dataset.level;
-      buildOrder();
-      showScenario();
+      startRound(levelIndexes());
     });
   });
 
@@ -515,7 +615,6 @@
     btn.disabled = lvl !== "All" && !scenarios.some(function (s) { return s.level === lvl; });
   });
 
-  buildOrder();
-  showScenario();
+  startRound(levelIndexes());
   updateScore();
 })();

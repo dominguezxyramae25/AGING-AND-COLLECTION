@@ -134,6 +134,44 @@ main { padding-top: 16px; padding-bottom: 40px; }
   font-weight: 600;
 }
 
+/* ---------- Shuffle switch ---------- */
+.toolbar { display: flex; justify-content: flex-end; margin: -6px 0 12px; }
+
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  user-select: none;
+}
+.switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.switch-track {
+  position: relative;
+  width: 42px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--border);
+  transition: background 0.15s;
+  flex: 0 0 auto;
+}
+.switch-track::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 0.15s;
+}
+.switch input:checked + .switch-track { background: var(--primary); }
+.switch input:checked + .switch-track::after { transform: translateX(18px); }
+.switch input:focus-visible + .switch-track { outline: 2px solid var(--primary); outline-offset: 2px; }
+
 /* ---------- Cards ---------- */
 .card {
   background: var(--surface);
@@ -364,6 +402,33 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 
 #explanation { margin: 0; }
 
+/* ---------- Round summary ---------- */
+.summary-score { font-size: 1.25rem; font-weight: 700; margin: 8px 0 2px; }
+
+.summary-list { list-style: none; padding: 0; margin: 16px 0; display: flex; flex-direction: column; gap: 6px; }
+.summary-list li {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 0.925rem;
+}
+.summary-list .icon { flex: 0 0 auto; font-weight: 700; width: 1em; text-align: center; }
+.summary-list li.ok { background: var(--good-soft); }
+.summary-list li.ok .icon { color: var(--good); }
+.summary-list li.bad { background: var(--bad-soft); }
+.summary-list li.bad .icon { color: var(--bad); }
+.summary-list li.skip .icon { color: var(--muted); }
+.summary-level {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.summary .actions { display: flex; flex-direction: column; }
+
 /* ---------- Wider screens ---------- */
 @media (min-width: 600px) {
   .app-header h1 { font-size: 1.35rem; }
@@ -374,4 +439,6 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   .line-top select { flex: 1 1 50%; }
   .line input.amt { flex: 0 1 160px; }
   .remove-btn { order: 5; }
+  .summary .actions { flex-direction: row; }
+  .summary .actions .btn { flex: 1 1 0; }
 }

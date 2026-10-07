@@ -38,6 +38,8 @@ own within a few minutes.
 ## How students use it
 
 1. **Pick a level** at the top: All, Basic, Intermediate or Advanced.
+   Turn on **Shuffle order** to get the scenarios in a random order, so
+   students can't memorise the sequence. Each new round is shuffled again.
 2. **Read the transaction** in the box at the top.
 3. **Build the journal entry.** On each line:
    - choose an account from the dropdown,
@@ -53,6 +55,15 @@ own within a few minutes.
    - the correct entry and a short explanation of why.
 5. Tap **Try again** to clear the entry and redo the same scenario, or
    **Next scenario** to go to the next one.
+6. **End of the round.** On the last scenario the button changes to
+   **See results**. The results screen shows how many were correct on the
+   first try, and lists every scenario as correct (✓), missed (✗) or
+   skipped (–). From there:
+   - **Retry missed** starts a short review round with only the missed and
+     skipped scenarios.
+   - **Start over** begins the whole level again.
+
+   Changing the level or turning shuffle on or off also starts a new round.
 
 **Score:** the score at the top right counts only the *first* check of each
 scenario, so trying again after seeing the answer doesn't raise it. The score
@@ -66,7 +77,7 @@ resets when the page is closed or reloaded, or when you tap **Reset score**.
 |---|---|---|
 | `index.html` | The page itself: the layout of the boxes, buttons and headings. This is the file you open. | No |
 | `styles.css` | The look: colors, sizes, spacing and the phone-friendly layout. Also switches to dark colors when the phone is in dark mode. | No |
-| `app.js` | The "brain": builds the entry lines, adds up totals, checks answers, writes the feedback and keeps score. | No |
+| `app.js` | The "brain": builds the entry lines, adds up totals, checks answers, writes the feedback, keeps score, shuffles the order and builds the end-of-round results. | No |
 | `scenarios.js` | **The content**: the list of accounts in the dropdown and all the practice scenarios with their answers and explanations. | **Yes. This is the file you edit to add questions.** |
 | `README.md` | This guide. | Only if you want |
 

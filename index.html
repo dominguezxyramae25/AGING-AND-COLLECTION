@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Journal Entry Practice</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="wrap header-inner">
+      <h1>Journal Entry Practice</h1>
+      <div class="score" aria-live="polite">
+        <span class="score-label">Score</span>
+        <span id="score-value" class="score-value">0 / 0</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div id="load-warning" class="notice notice-warn" hidden></div>
+
+    <nav class="levels" aria-label="Difficulty level">
+      <button type="button" class="level-btn" data-level="All" aria-pressed="true">All</button>
+      <button type="button" class="level-btn" data-level="Basic" aria-pressed="false">Basic</button>
+      <button type="button" class="level-btn" data-level="Intermediate" aria-pressed="false">Intermediate</button>
+      <button type="button" class="level-btn" data-level="Advanced" aria-pressed="false">Advanced</button>
+    </nav>
+
+    <section class="card scenario" aria-labelledby="scenario-heading">
+      <div class="scenario-meta">
+        <span id="scenario-level" class="tag"></span>
+        <span id="scenario-progress" class="muted"></span>
+      </div>
+      <h2 id="scenario-heading" class="sr-only">Transaction</h2>
+      <p id="scenario-text" class="scenario-text"></p>
+      <p id="scenario-note" class="muted small" hidden></p>
+    </section>
+
+    <section class="card entry" aria-labelledby="entry-heading">
+      <h2 id="entry-heading" class="card-title">Your journal entry</h2>
+      <p class="muted small">Pick an account, type the amount, then tap Debit or Credit.</p>
+
+      <div id="lines" class="lines"></div>
+
+      <button type="button" id="add-line" class="btn btn-ghost btn-block">+ Add line</button>
+
+      <dl class="totals">
+        <div><dt>Total debits</dt><dd id="total-debit">0.00</dd></div>
+        <div><dt>Total credits</dt><dd id="total-credit">0.00</dd></div>
+      </dl>
+      <p id="balance-status" class="balance-status"></p>
+
+      <div id="form-error" class="notice notice-error" role="alert" hidden></div>
+
+      <button type="button" id="check" class="btn btn-primary btn-block">Check Answer</button>
+    </section>
+
+    <section id="feedback" class="card feedback" aria-live="polite" hidden>
+      <h2 id="result-headline" class="result-headline"></h2>
+      <p id="practice-note" class="muted small" hidden>Practice attempt: only your first check on each scenario counts toward the score.</p>
+      <ul id="feedback-list" class="feedback-list"></ul>
+
+      <h3 class="subhead">Correct entry</h3>
+      <div class="table-scroll">
+        <table class="answer-table">
+          <thead>
+            <tr><th scope="col">Account</th><th scope="col" class="num">Debit</th><th scope="col" class="num">Credit</th></tr>
+          </thead>
+          <tbody id="answer-body"></tbody>
+        </table>
+      </div>
+
+      <h3 class="subhead">Why</h3>
+      <p id="explanation"></p>
+    </section>
+
+    <div class="actions">
+      <button type="button" id="try-again" class="btn btn-secondary">Try again</button>
+      <button type="button" id="next" class="btn btn-primary">Next scenario</button>
+    </div>
+
+    <p class="footer-links">
+      <button type="button" id="reset-score" class="link-btn">Reset score</button>
+    </p>
+  </main>
+
+  <!-- scenarios.js must load before app.js -->
+  <script src="scenarios.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
